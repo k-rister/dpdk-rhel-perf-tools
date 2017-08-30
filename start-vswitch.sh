@@ -33,6 +33,7 @@ numa_mode="strict" # numa_mode: (for DPDK vswitches only)
 			#            the local NUMA node, but VMs are present on another NUMA node,
 			#            and so the PMD threads for those virt devices are also on
 			#            another NUMA node.
+controller="none"
 overlay="none" # overlay: Currently supported is: none (for all switch types) and vxlan (for linuxbridge and ovs)
 prefix="" # prefix: the path prepended to the calls to operate ovs.  use "" for ovs RPM and "/usr/local" for src built OVS
 dpdk_nic_kmod="vfio-pci" # dpdk-devbind: the kernel module to use when assigning a network device to a userspace program (DPDK application)
@@ -328,14 +329,36 @@ function get_cpumask() {
 function set_ovs_bridge_mode() {
 	local bridge=$1
 	local switch_mode=$2
+	local controller=$3
 
-	case "${switch_mode}" in
-		"l2-bridge")
-			$prefix/bin/ovs-ofctl add-flow ${bridge} action=NORMAL
+	case "${controller}" in
+		"none")
+			case "${switch_mode}" in
+				"l2-bridge")
+					$prefix/bin/ovs-ofctl add-flow ${bridge} action=NORMAL
+					;;
+				"default"|"direct-flow-rule")
+					$prefix/bin/ovs-ofctl add-flow ${bridge} "in_port=1,idle_timeout=0 actions=output:2"
+					$prefix/bin/ovs-ofctl add-flow ${bridge} "in_port=2,idle_timeout=0 actions=output:1"
+					;;
+			esac
 			;;
-		"default"|"direct-flow-rule")
-			$prefix/bin/ovs-ofctl add-flow ${bridge} "in_port=1,idle_timeout=0 actions=output:2"
-			$prefix/bin/ovs-ofctl add-flow ${bridge} "in_port=2,idle_timeout=0 actions=output:1"
+		"odl-l2-bridge"|"odl")
+			$prefix/bin/ovs-vsctl set bridge ${bridge} protocols=OpenFlow13
+			$prefix/bin/ovs-vsctl set-controller ${bridge} tcp:127.0.0.1:6633
+			$prefix/bin/ovs-vsctl set-fail-mode ${bridge} secure
+			response=$($prefix/bin/ovs-vsctl get-controller ${bridge})
+			echo "Controller for ${bridge} is \"${response}\""
+
+			case "${switch_mode}" in
+				"l2-bridge")
+					$prefix/bin/ovs-ofctl add-flow ${bridge} action=NORMAL --protocols=OpenFlow13
+					;;
+				"default"|"direct-flow-rule")
+					$prefix/bin/ovs-ofctl add-flow ${bridge} "in_port=1,idle_timeout=0 actions=output:2" --protocols=OpenFlow13
+					$prefix/bin/ovs-ofctl add-flow ${bridge} "in_port=2,idle_timeout=0 actions=output:1" --protocols=OpenFlow13
+					;;
+			esac
 			;;
 	esac
 }
@@ -377,7 +400,7 @@ function vpp_create_vhost_user() {
 }
 
 # Process options and arguments
-opts=$(getopt -q -o i:c:t:r:m:p:M:S:C:o --longoptions "vhost-affinity:,numa-mode:,desc-override:,vhost_devices:,pci-devices:,devices:,nr-queues:,use-ht:,overlay:,topology:,dataplane:,switch:,switch-mode:,testpmd-path:,vpp-version:" -n "getopt.sh" -- "$@")
+opts=$(getopt -q -o i:c:t:r:m:p:M:S:C:o --longoptions "vhost-affinity:,numa-mode:,desc-override:,vhost_devices:,pci-devices:,devices:,nr-queues:,use-ht:,overlay:,topology:,dataplane:,switch:,switch-mode:,testpmd-path:,vpp-version:,controller:" -n "getopt.sh" -- "$@")
 if [ $? -ne 0 ]; then
 	printf -- "$*\n"
 	printf "\n"
@@ -404,6 +427,7 @@ if [ $? -ne 0 ]; then
 	printf -- "\t\t                                        \tvpp:         default/xconnect, l2-bridge\n"
 	printf -- "\t\t             --testpmd-path=str         override the default location for the testpmd binary (${testpmd_path})\n"
 	printf -- "\t\t             --vpp-version=str          control which VPP command set to use: 17.04 or 17.07 (default is ${vpp_version})\n"
+	printf -- "\t\t             --controller=str           specify a cotroller to use, available controllers are: none or odl\n"
 	exit_error ""
 fi
 echo opts: [$opts]
@@ -510,6 +534,14 @@ while true; do
 			echo switch_mode: [$switch_mode]
 		fi
 		;;
+		--controller)
+		shift
+		if [ -n "$1" ]; then
+			controller="$1"
+			shift
+			echo controller: [$controller]
+		fi
+		;;
 		--testpmd-path)
 		shift
 		if [ -n "$1" ]; then
@@ -577,6 +609,15 @@ case "${switch}" in
 				;;
 		esac
 		;;
+esac
+
+# validate controller
+case "${controller}" in
+	"none"|"odl-l2-bridge"|"odl-ovsdb"|"odl")
+	;;
+	*)
+	exit_error "${controller} is not a supported controller"
+	;;
 esac
 
 # check for software dependencies
@@ -1124,7 +1165,7 @@ case $switch in
 					ovs-vsctl set Interface $vhost_port options:n_rxq_desc=$vhu_desc_override
 				fi
 				$prefix/bin/ovs-ofctl del-flows $phy_br
-				set_ovs_bridge_mode $phy_br ${switch_mode}
+				set_ovs_bridge_mode $phy_br ${switch_mode} ${controller}
 			else
 				if [ "$overlay" == "vxlan" -o "$overlay" == "half-vxlan" -a $i -eq 0 ]; then
 					vxlan_br="vxlan-br-$i"
@@ -1155,7 +1196,7 @@ case $switch in
 		$prefix/bin/ovs-vsctl add-port ovsbr0 ${ovs_dpdk_interface_0_name} -- set Interface ${ovs_dpdk_interface_0_name} type=dpdk ${ovs_dpdk_interface_0_args}
 		$prefix/bin/ovs-vsctl add-port ovsbr0 ${ovs_dpdk_interface_1_name} -- set Interface ${ovs_dpdk_interface_1_name} type=dpdk ${ovs_dpdk_interface_1_args}
 		$prefix/bin/ovs-ofctl del-flows ovsbr0
-		set_ovs_bridge_mode ovsbr0 ${switch_mode}
+		set_ovs_bridge_mode ovsbr0 ${switch_mode} ${controller}
 		ovs_ports=2
 	esac
 	echo "using $queues queue(s) per port"
@@ -1174,7 +1215,34 @@ case $switch in
 		ovs-vsctl set Interface ${ovs_dpdk_interface_1_name} options:n_txq_desc=$pci_descriptors
 		ovs-vsctl set Interface ${ovs_dpdk_interface_1_name} options:n_rxq_desc=$pci_descriptors
 	fi
-	
+
+	case "${controller}" in
+#		"odl")
+#		case "${topology}" in
+#			"pvp"|"pv,vp")   # 10GbP1<-->VM1P1, VM1P2<-->10GbP2
+#			for i in `seq 0 1`; do
+#				phy_br="phy-br-${i}"
+#				$prefix/bin/ovs-vsctl set bridge ${phy_br} protocols=OpenFlow13
+#				$prefix/bin/ovs-vsctl set-controller ${phy_br} tcp:127.0.0.1:6633
+#				$prefix/bin/ovs-vsctl set-fail-mode ${phy_br} secure
+#				$prefix/bin/ovs-vsctl get-controller ${phy_br}
+#			done
+#			;;
+#			"pp")  # 10GbP1<-->10GbP2
+#			$prefix/bin/ovs-vsctl set bridge ovsbr0 protocols=OpenFlow13
+#			$prefix/bin/ovs-vsctl set-controller ovsbr0 tcp:127.0.0.1:6633
+#			$prefix/bin/ovs-vsctl set-fail-mode ovsbr0 secure
+#			$prefix/bin/ovs-vsctl get-controller ovsbr0
+#			;;
+#		esac
+#		;;
+		"odl-ovsdb"|"odl")
+			$prefix/bin/ovs-vsctl set-manager tcp:127.0.0.1:6640
+			response=$($prefix/bin/ovs-vsctl get-manager)
+			echo "Manager for OVS is \"${response}\""
+			;;
+	esac
+
 	#configure the number of PMD threads to use
 	pmd_threads=`echo "$ovs_ports * $queues" | bc`
 	echo "using a total of $pmd_threads PMD threads"
