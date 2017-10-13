@@ -1240,7 +1240,7 @@ case $switch in
 #		esac
 #		;;
 		"odl-ovsdb"|"odl")
-			$prefix/bin/ovs-vsctl set-manager tcp:127.0.0.1:6640
+			#$prefix/bin/ovs-vsctl set-manager tcp:127.0.0.1:6640
 			response=$($prefix/bin/ovs-vsctl get-manager)
 			echo "Manager for OVS is \"${response}\""
 			;;
