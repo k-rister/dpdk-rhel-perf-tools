@@ -346,9 +346,12 @@ function set_ovs_bridge_mode() {
 		"odl-l2-bridge"|"odl")
 			$prefix/bin/ovs-vsctl set bridge ${bridge} protocols=OpenFlow13
 			$prefix/bin/ovs-vsctl set-controller ${bridge} tcp:127.0.0.1:6633
-			$prefix/bin/ovs-vsctl set-fail-mode ${bridge} secure
+			#$prefix/bin/ovs-vsctl set-fail-mode ${bridge} secure
+			$prefix/bin/ovs-vsctl set-fail-mode ${bridge} standalone
 			response=$($prefix/bin/ovs-vsctl get-controller ${bridge})
 			echo "Controller for ${bridge} is \"${response}\""
+			response=$($prefix/bin/ovs-vsctl get-fail-mode ${bridge})
+			echo "Controller fail mode for ${bridge} is \"${response}\""
 
 			case "${switch_mode}" in
 				"l2-bridge")
