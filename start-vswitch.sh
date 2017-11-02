@@ -343,11 +343,17 @@ function set_ovs_bridge_mode() {
 					;;
 			esac
 			;;
-		"odl-l2-bridge"|"odl")
+		"odl-l2-bridge"|"odl"|"null")
 			$prefix/bin/ovs-vsctl set bridge ${bridge} protocols=OpenFlow13
-			$prefix/bin/ovs-vsctl set-controller ${bridge} tcp:127.0.0.1:6633
-			#$prefix/bin/ovs-vsctl set-fail-mode ${bridge} secure
-			$prefix/bin/ovs-vsctl set-fail-mode ${bridge} standalone
+
+			case "${controller}" in
+			    "odl"|"odl-l2-bridge")
+				$prefix/bin/ovs-vsctl set-controller ${bridge} tcp:127.0.0.1:6633
+				#$prefix/bin/ovs-vsctl set-fail-mode ${bridge} secure
+				$prefix/bin/ovs-vsctl set-fail-mode ${bridge} standalone
+				;;
+			esac
+
 			response=$($prefix/bin/ovs-vsctl get-controller ${bridge})
 			echo "Controller for ${bridge} is \"${response}\""
 			response=$($prefix/bin/ovs-vsctl get-fail-mode ${bridge})
@@ -430,7 +436,7 @@ if [ $? -ne 0 ]; then
 	printf -- "\t\t                                        \tvpp:         default/xconnect, l2-bridge\n"
 	printf -- "\t\t             --testpmd-path=str         override the default location for the testpmd binary (${testpmd_path})\n"
 	printf -- "\t\t             --vpp-version=str          control which VPP command set to use: 17.04 or 17.07 (default is ${vpp_version})\n"
-	printf -- "\t\t             --controller=str           specify a cotroller to use, available controllers are: none or odl\n"
+	printf -- "\t\t             --controller=str           specify a controller to use, available controllers are: none or odl or null (controller setup without a controller configured)\n"
 	exit_error ""
 fi
 echo opts: [$opts]
@@ -616,7 +622,7 @@ esac
 
 # validate controller
 case "${controller}" in
-	"none"|"odl-l2-bridge"|"odl-ovsdb"|"odl")
+	"none"|"odl-l2-bridge"|"odl-ovsdb"|"odl"|"null")
 	;;
 	*)
 	exit_error "${controller} is not a supported controller"
@@ -1239,7 +1245,7 @@ case $switch in
 #			;;
 #		esac
 #		;;
-		"odl-ovsdb"|"odl")
+		"odl-ovsdb"|"odl"|"null")
 			#$prefix/bin/ovs-vsctl set-manager tcp:127.0.0.1:6640
 			response=$($prefix/bin/ovs-vsctl get-manager)
 			echo "Manager for OVS is \"${response}\""
